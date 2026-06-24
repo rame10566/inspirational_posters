@@ -1,0 +1,37 @@
+# ── Credentials & secrets ─────────────────────────────────────────────────
+email_config.json
+instagram_credentials.json
+
+# ── Generated output (posters, logs, caches) ──────────────────────────────
+output/
+
+# ── Browser sessions (WhatsApp QR state) ──────────────────────────────────
+output/browser_sessions/
+# (redundant but explicit)
+browser_sessions/
+
+# ── Python cache ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+.Python
+
+# ── Virtual environments ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── macOS system files ─────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editor / IDE ───────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Node (if any tooling is added) ────────────────────────────────────────
+node_modules/
