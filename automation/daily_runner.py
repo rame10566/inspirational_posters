@@ -144,6 +144,117 @@ def _free_unapproved_verse():
         print(f"    ⚠️  Could not free unapproved verse: {e}")
 
 
+def _server_is_running() -> bool:
+    """Return True if the approval server is listening on port 5678."""
+    import socket as _sock
+    try:
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(1)
+        result = s.connect_ex(("127.0.0.1", 5678))
+        s.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def _reapprove():
+    """
+    Restart the approval server + cloudflared tunnel and re-send the email
+    for today's pending poster.  Safe to call repeatedly — exits silently if:
+      - There is no pending poster for today
+      - Today's poster was already posted or skipped
+      - The server is already running (no restart needed)
+    """
+    import time
+
+    if not os.path.exists(PENDING_FILE):
+        print("✅  No pending poster — nothing to reapprove.")
+        return
+
+    try:
+        with open(PENDING_FILE) as f:
+            pending = json.load(f)
+    except Exception as e:
+        print(f"❌  Could not read pending_approval.json: {e}")
+        return
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    status = pending.get("status", "")
+    date   = pending.get("date", "")
+
+    if date != today:
+        print(f"✅  Pending poster is from {date}, not today — nothing to do.")
+        return
+    if status in ("posted", "skipped"):
+        print(f"✅  Today's poster already {status} — nothing to do.")
+        return
+    if status == "approved":
+        print(f"⏳  Posting already in progress (status=approved) — nothing to do.")
+        return
+
+    # status == "pending" and date == today: need to (re)start everything
+    if _server_is_running():
+        print("✅  Approval server already running — no restart needed.")
+        return
+
+    print(f"\n🔄  Restarting approval for {pending.get('day_label','')} {date}…")
+
+    # ── Kill any stale processes ─────────────────────────────────────────
+    subprocess.run(["pkill", "-f", "approval_server.py"], check=False)
+    subprocess.run(["pkill", "-f", "cloudflared"],        check=False)
+    time.sleep(2)
+
+    # ── Start fresh approval server ──────────────────────────────────────
+    server_script = os.path.join(AUTOMATION_DIR, "approval_server.py")
+    log_path  = os.path.join(BASE_DIR, "output", "server.log")
+    log_out   = open(log_path, "a")        # append so we keep history
+    proc = subprocess.Popen(
+        [sys.executable, server_script, PENDING_FILE],
+        stdout=log_out, stderr=log_out,
+        start_new_session=True,
+    )
+    time.sleep(3)
+    if proc.poll() is not None:
+        print(f"❌  Approval server failed to start (exit {proc.returncode}).")
+        print(f"    Check output/server.log for details.")
+        return
+    print(f"    ✅  Approval server restarted (PID {proc.pid})")
+
+    # ── Start fresh cloudflared tunnel ───────────────────────────────────
+    tunnel_url = None
+    if shutil.which("cloudflared"):
+        print(f"    🌍  Starting cloudflared tunnel…")
+        _, tunnel_url = _start_cloudflared_tunnel()
+        if tunnel_url:
+            print(f"    🌍  Remote URL: {tunnel_url}")
+        else:
+            print(f"    ⚠️  Tunnel unavailable — email will use local IP only.")
+
+    # ── Re-send approval email with new tunnel URL ───────────────────────
+    email_config = os.path.join(BASE_DIR, "email_config.json")
+    png_path     = pending.get("png_path", "")
+    quote        = pending.get("quote", {})
+    day_label    = pending.get("day_label", "")
+    caption      = pending.get("caption", "")
+
+    if os.path.exists(email_config) and png_path and os.path.exists(png_path):
+        print(f"    📧  Re-sending approval email…")
+        try:
+            from automation.send_email import send_approval_email
+            send_approval_email(png_path, quote, day_label, caption,
+                                base_url=tunnel_url)
+            print(f"    ✅  Email re-sent!")
+        except Exception as e:
+            print(f"    ⚠️  Email failed: {e}")
+    else:
+        token = pending.get("session_token", "")
+        print(f"\n    ℹ️  Open approval page manually:")
+        print(f"    open 'https://localhost:5678/?token={token}'")
+
+    print(f"\n✅  Reapprove complete. Check your email or open:")
+    print(f"    https://localhost:5678/?token={pending.get('session_token','')}\n")
+
+
 def _send_macos_notification(title: str, message: str):
     """Send a macOS system notification (no extra packages needed)."""
     script = (
@@ -300,7 +411,15 @@ if __name__ == "__main__":
     parser.add_argument("--catchup",   action="store_true",
                         help="Only run if today's poster hasn't been generated yet "
                              "(safe to call on every login/wake — skips silently if already done)")
+    parser.add_argument("--reapprove", action="store_true",
+                        help="Restart approval server + tunnel + re-send email for today's "
+                             "pending poster. Safe to call repeatedly — exits silently if "
+                             "already posted/skipped or server is already running.")
     args = parser.parse_args()
+
+    if args.reapprove:
+        _reapprove()
+        sys.exit(0)
 
     if args.catchup and _already_ran_today():
         print("✅  Today's poster was already generated — nothing to do.")
