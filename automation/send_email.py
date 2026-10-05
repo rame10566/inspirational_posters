@@ -74,31 +74,36 @@ def send_approval_email(png_path: str, quote: dict, day_label: str, caption: str
     source_line   = f"— {author}, {source}" if author else f"— {source}"
     morning_msg   = quote.get("good_morning_message", "")
 
+    # Always compute the local IP for use as a fallback backup URL.
+    import socket as _socket
+    try:
+        _s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        _s.connect(("8.8.8.8", 80))
+        local_ip = _s.getsockname()[0]
+        _s.close()
+    except Exception:
+        local_ip = "localhost"
+    local_base = f"https://{local_ip}:{APPROVAL_PORT}"
+
     # Use cloudflared public URL if provided (works from any network/device),
     # otherwise fall back to the Mac's local network IP (same-WiFi only).
-    if base_url:
-        base = base_url.rstrip("/")
-    else:
-        import socket as _socket
-        try:
-            _s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
-            _s.connect(("8.8.8.8", 80))
-            local_ip = _s.getsockname()[0]
-            _s.close()
-        except Exception:
-            local_ip = "localhost"
-        base = f"https://{local_ip}:{APPROVAL_PORT}"
+    base = base_url.rstrip("/") if base_url else local_base
 
     token         = quote.get("_session_token", "")
-    base          = base
     tok           = f"token={token}" if token else ""
-    def _url(path): return f"{base}{path}{'&' if '?' in path else '?'}{tok}" if tok else f"{base}{path}"
+    def _url(path, b=None):
+        b = b or base
+        return f"{b}{path}{'&' if '?' in path else '?'}{tok}" if tok else f"{b}{path}"
 
     approve_url   = _url("/approve")
     skip_url      = _url("/skip")
     new_image_url = _url("/regenerate?type=image")
     new_verse_url = _url("/regenerate?type=verse")
     review_url    = _url("/")
+
+    # Local fallback URLs (for use on Mac if cloudflare drops)
+    local_approve_url = _url("/approve", local_base)
+    local_review_url  = _url("/", local_base)
 
     html_body = f"""
 <!DOCTYPE html>
@@ -124,31 +129,17 @@ def send_approval_email(png_path: str, quote: dict, day_label: str, caption: str
     </p>
   </blockquote>
 
-  <!-- Regenerate options -->
+  <!-- Review link -->
   <div style="text-align:center;margin:20px 0 8px;">
-    <a href="{new_image_url}"
-       style="background:#ff9800;color:#fff;padding:12px 24px;border-radius:10px;
-              text-decoration:none;font-size:14px;display:inline-block;
-              font-family:Georgia,serif;">
-      🔄 New Image
-    </a>
-    &nbsp;
-    <a href="{new_verse_url}"
-       style="background:#9c27b0;color:#fff;padding:12px 24px;border-radius:10px;
-              text-decoration:none;font-size:14px;display:inline-block;
-              font-family:Georgia,serif;">
-      📝 New Verse
-    </a>
-    &nbsp;
     <a href="{review_url}"
-       style="background:#607d8b;color:#fff;padding:12px 24px;border-radius:10px;
+       style="background:#607d8b;color:#fff;padding:12px 28px;border-radius:10px;
               text-decoration:none;font-size:14px;display:inline-block;
               font-family:Georgia,serif;">
-      👁 Review
+      👁 Review poster &amp; swap image / verse
     </a>
   </div>
   <p style="color:#bbb;font-size:11px;text-align:center;margin:4px 0 20px;">
-    Not happy with the image or verse? Tap above — then open Review to see the updated poster.
+    Open Review to see the full poster and swap the image or verse before posting.
   </p>
 
   <!-- Post actions -->
@@ -171,6 +162,19 @@ def send_approval_email(png_path: str, quote: dict, day_label: str, caption: str
   <p style="color:#bbb;font-size:12px;text-align:center;margin-top:8px;">
     All buttons require your Mac to be on and the poster app to be running.
   </p>
+
+  <!-- Local fallback — shown when cloudflare drops -->
+  <div style="margin-top:20px;padding:12px 16px;background:#f5f5f5;border-radius:10px;
+              border-left:3px solid #ccc;">
+    <p style="color:#888;font-size:12px;margin:0 0 6px;">
+      📡 <strong>If the buttons above don't work</strong> (cloudflare dropped), open this on your Mac:
+    </p>
+    <a href="{local_review_url}"
+       style="color:#405DE6;font-size:12px;word-break:break-all;">{local_review_url}</a>
+    &nbsp;·&nbsp;
+    <a href="{local_approve_url}"
+       style="color:#2e7d32;font-size:12px;">Direct approve</a>
+  </div>
 
   <details style="margin-top:16px;">
     <summary style="color:#999;font-size:12px;cursor:pointer;">Caption preview</summary>

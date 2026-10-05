@@ -93,10 +93,19 @@ def post_whatsapp_status(png_path: str) -> bool:
                       wait_until="domcontentloaded")
 
             try:
+                # First wait for "Loading your chats" spinner to disappear
+                try:
+                    page.wait_for_selector(
+                        "text=Loading your chats",
+                        state="hidden", timeout=90000,
+                    )
+                except Exception:
+                    pass  # spinner may not appear or may already be gone
+                # Then wait for the chat list to be visible
                 page.wait_for_selector(
                     '#pane-side, [data-testid="chatlist-header"], '
                     'div[aria-label="Chat list"]',
-                    timeout=60000,
+                    timeout=120000,
                 )
                 print("    ✅  Logged in")
             except Exception:
